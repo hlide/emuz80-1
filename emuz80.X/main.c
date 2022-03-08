@@ -96,7 +96,7 @@
  * |                                    |
  * +------------------------------------+ $BFFF-$C000
  * |                                    |
- * :      I/O registers Mirror #2       : RW(A14 = 1b) => UART
+ * :        I/O registers               : RW(A14 = 1b) => UART
  * |[--------U3TXB/U3RXB---------] $E000| 
  * |[-----------PIR9-------------] $E001|
  * |                                    |
@@ -107,9 +107,11 @@
  * into mirrored RAM, we do read the stored byte. Why?
  * 1) writing into RAM is faster than reading from RAM so it is better
  *    to slow down the writing RAM process than the reading RAM process.
- * 2) BASIC relies on the fact that it can modifies a byte to allocate the RAM.
- *    By preventing the storing in mirrored RAM, BASIC can safely allocate
+ * 2) BASIC relies upon the fact that it can alter a byte to allocate the RAM.
+ *    By preventing from storing in mirrored RAM, BASIC can safely allocate
  *    the right amount of RAM.
+ * 
+ * I wish we may only mirror RAM and ROM to make the address decoder simpler.
  *  
  */
 
@@ -329,10 +331,6 @@ void main(void) {
     //RA7PPS = 0;     // PPS as LATA7
     
     // Prepare ROM access once
-    asm("movlw	low _rom");
-    asm("movwf	tblptrl,c");
-    asm("movlw	high _rom");
-    asm("movwf	tblptrh,c");
     asm("movlw	low (_rom shr (0+16))");
     asm("movwf	tblptru,c");
 
@@ -410,7 +408,6 @@ void main(void) {
                 asm("andlw	15"); // (high RAM_SIZE)-1
                 asm("addlw	(high _ram)");
                 asm("movwf	fsr2h,c");
-                asm("movf	indf2,w,c");
                 asm("movff	PORTC,indf2");
             } else if ((A8_15 & 0x40) == 0x40) {
                 // $4000-$7FFF or $C000-$FFFF -> I/O UART (U3 TX buffer)
