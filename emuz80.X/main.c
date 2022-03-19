@@ -65,38 +65,6 @@ void main(void) {
     U3ON = 1; // Serial port enable
 #endif
    
-#if USE_HARDWARE_CLK_GENERATOR
-    // CLC1.G4POL-------------.
-    //                        |
-    //                     .-----.
-    // RA2(/RFSH)------|>O-|D S Q|---RA4(/WAIT)
-    //                     |     |
-    // RA1(/MREQ)------|>O-|>   _|
-    //                     |  R Q|
-    //                     '-----'
-    //                       CLC1
-    
-    RA4PPS    = 0x01; // RA4(/WAIT)
-    
-    CLCIN0PPS = 0x01; // RA1(/MREQ)    
-    CLCIN1PPS = 0x02; // RA2(/RFSH)    
-
-    // CLC1 logic configuration
-   
-    CLCSELECT = 0;   // Select CLC1 registers  
-    CLCnPOL = 0x03;  // G1POL and G2POL inverted
-    // CLC1 data inputs select
-    CLCnSEL0 = 0x00; // D-FF CLK - CLCIN0PPS(RA1 = /MREQ)
-    CLCnSEL1 = 0x01; // D-FF D   - CLCIN1PPS(RA2 = /RFSH)
-    CLCnSEL2 = 0x7F; // D-FF S   - none
-    CLCnSEL3 = 0x7F; // D-FF R   - none
-    // CLC1 gates logic select
-    CLCnGLS0 = 0x02; // G1D1T enabled 
-    CLCnGLS1 = 0x08; // G2D2T enabled
-    CLCnGLS2 = 0x00; // none
-    CLCnGLS3 = 0x00; // none
-    CLCnCON = 0x04;  // Disabled, 1-input D flip-flop with S and R, no interrupt
-#else
     // RA3(CLK)---------------.
     //                        |
     //                     .-----.
@@ -128,21 +96,9 @@ void main(void) {
     CLCnGLS2 = 0x00; // none
     CLCnGLS3 = 0x80; // G4D4T enabled
     CLCnCON = 0x04;  // Disabled, 1-input D flip-flop with S and R, no interrupt
-#endif
        
     // Z80 clock by NCO FDC mode (RA3)
-#if USE_HARDWARE_CLK_GENERATOR
-    RA3PPS = 0x3f; // RA3 assign NCO1
-    NCO1INCU = (unsigned char)((Z80_CLK*2/61/65536) & 0xff);
-    NCO1INCH = (unsigned char)((Z80_CLK*2/61/256) & 0xff);
-    NCO1INCL = (unsigned char)((Z80_CLK*2/61) & 0xff);
-    NCO1CLK = 0x00; // Clock source Fosc
-    NCO1PFM = 0;  // FDC mode
-    NCO1OUT = 1;  // NCO output enable
-    NCO1EN = 1;   // NCO enable
-#else
     RA3PPS = 0x00;
-#endif
     
     // Z80 start
 
@@ -151,133 +107,6 @@ void main(void) {
     asm("movwf	tblptru,c");
 
     CLCnCON = 0x84;
-
-#if USE_HARDWARE_CLK_GENERATOR
-    
-    // Force /WAIT = 1
-    nWAIT_s = 1;
-
-    // Do not release /RESET right after starting CLK generation
-    while (CLK == 1);
-    while (CLK == 0);
-    while (CLK == 1);
-    while (CLK == 0);
-    while (CLK == 1);
-    while (CLK == 0);
-    while (CLK == 1);
-    while (CLK == 0);
-
-    // Release /RESET
-    nRESET_q = 1;
-
-    nWAIT_s = 0;
-    
-    //while (nMREQ == 1);
-    
-#if 0
-    // Set data bus as output
-    D0_7_dir = 0x00;
-    D0_7_q = 0x00;
-    
-    while (1)
-    {
-        while (nWAIT == 1);
-
-        // Release /WAIT
-        nWAIT_s = 1;
-
-        // Rearm /WAIT D-FF
-        nWAIT_s = 0;
-    }
-#else
-    while (1) {
-    
-        // Wait for /WAIT falling down
-        while (nWAIT == 1)
-            ;
-
-        TEST(^= 1);
-
-        if (!nRD) {
-            // Z80 memory read cycle (/RD active)
-            
-            if ((A8_15 & 0x80) == 0) {
-                // $0000-$3FFF -> ROM (16KB)
-                // $4000-$7FFF -> garbage (16KB)
-
-                // D0_7_q = rom[A0_15];
-                asm("movff	PORTB,tblptrl");
-                asm("movff	PORTD,tblptrh");
-                asm("tblrd	*");
-                asm("movff	tablat,LATC");
-            } else if ((A8_15 & 0x40) == 0) {
-                // $8000-$BFFF -> RAM (16KB = 4 x 4KB mirrored)
-
-                // D0_7_q = ram[(A0_15 & (RAM_SIZE-1)];
-                asm("movf   PORTB,w");
-                asm("movwf	fsr2l,c");
-                asm("movf   PORTD,w");
-                asm("andlw	15"); // (high RAM_SIZE)-1
-                asm("addlw	(high _ram)");
-                asm("movwf	fsr2h,c");
-                asm("movf	indf2,w,c");
-                asm("movwf	LATC,c");                   
-            } else {
-                // $C000-$FFFF -> I/O registers
-                
-                // I/O UART (A0 = 1: U3 flag / 0: U3 RX buffer)
-                D0_7_q = (A0_7 & 1) ? PIR9 : U3RXB;
-            }
-
-            // Set data bus as output
-            D0_7_dir = 0x00;
-
-            // Release /WAIT
-            nWAIT_s = 1;
-
-            // Rearm /WAIT D-FF
-            nWAIT_s = 0;
-
-            // Wait /RD termination
-            while (!nRD);
-
-            // Set data bus as input
-            D0_7_dir = 0xff;
-        } else {
-            // Z80 memory write cycle (/RD inactive, /WR implicitly active)
-            
-            if ((A8_15 & 0xf0) == 0x80) {
-                // $8000-$8FFF -> RAM 4KB
-
-                // ram[A0_15 & (RAM_SIZE-1)] = D0_7;
-                asm("movf   PORTB,w");
-                asm("movwf	fsr2l,c");
-                asm("movf   PORTD,w");
-                asm("andlw	15"); // (high RAM_SIZE)-1
-                asm("addlw	(high _ram)");
-                asm("movwf	fsr2h,c");
-                asm("movff	PORTC,indf2");
-            } else if ((A8_15 & 0x40) == 0x40) {
-                // $4000-$7FFF or $C000-$FFFF -> I/O UART (U3 TX buffer)
-                
-                U3TXB = D0_7;
-            } else {
-                // store nothing
-            }
-            // Release /WAIT
-            nWAIT_s = 1;
-
-            // Rearm /WAIT D-FF
-            nWAIT_s = 0;
-            
-            // Wait /WR termination --- unneeded!
-            //while (!nWR);
-        }
-
-        TEST(^= 1);
-    }
-#endif
-#else
 
     CLK_q = 1, CLK_q = 0;
     CLK_q = 1, CLK_q = 0;
@@ -358,5 +187,4 @@ void main(void) {
             CLK_q = 0, CLK_q = 1; // T2->T3
         }
     }
-#endif
 }

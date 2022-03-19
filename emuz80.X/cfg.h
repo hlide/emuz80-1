@@ -62,7 +62,6 @@
 #include <xc.h>
 //#include <stdio.h>
 
-#define USE_HARDWARE_CLK_GENERATOR 1
 #define USE_RA7_FOR_TEST_PIN 0
 
 #define PIC_CLK 16000000UL // 16MIPS
