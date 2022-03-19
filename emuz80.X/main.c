@@ -62,7 +62,10 @@
 #include <xc.h>
 #include <stdio.h>
 
-#define Z80_CLK 4000000UL // Z80 clock frequency
+#define USE_HARDWARE_CLK_GENERATOR 1
+
+//#define Z80_CLK  4000000UL // Z80 clock frequency
+#define Z80_CLK  4500000UL // Z80 clock frequency
 #define PIC_CLK 16000000UL // 16MIPS
 
 //#define ROM_SIZE 0x2000 // ROM size 8K bytes
@@ -71,28 +74,34 @@
 #define RAM_TOP 0x8000 // RAM start address
 #define UART_DREG 0xE000 // UART data register address
 #define UART_CREG 0xE001 // UART control register address
+
+#define USE_RA7_FOR_TEST_PIN 0
+#if USE_RA7_FOR_TEST_PIN
+#define TEST(x) LATA7 x
+#else
+#define TEST(x)
+#endif
+
     
 /*
  * Memory mapping to ease address decoding:
  * 
  * +------------------------------------+ $0000
  * |                                    |
- * :             ROM 16KB               : RO(A15..13 = 000b) => ROM
- * :                                    : WO(A15..13 = 000b) => no storing
+ * :              ROM 16KB              : RO(A15..13 = 000b) => ROM
+ * :                                    : WO(A15..13 = 000b) => Data bus HI-Z
  * |                                    |
  * +------------------------------------+ $3FFF-$7FFF
  * |                                    |
- * :              GARBAGE               : RO(A15..13 = 001b) => GARBAGE
- * :                                    : WO(A15..13 = 001b) => no storing
+ * :            Data bus HI-Z           : RW(A15..13 = 001b) => Data bus HI-Z
  * |                                    |
  * +------------------------------------+ $7FFF-$8000
  * |                                    |
- * :              RAM 4KB               : RW(A15..13 = 100b) => RAM
+ * :              RAM 4KB               : RW(A15..12 = 1000b) => RAM
  * |                                    |
- * +------------------------------------+ $9FFF-$A000
+ * +------------------------------------+ $8FFF-$9000
  * |                                    |
- * :          RAM 4KB mirrored          : RO(A15..14 != 100b) => RAM mirrored
- * :                                    : WO(A15..14 != 100b) => no storing
+ * :            Data bus HI-Z           : RW(A15..12 != 1000b) => Data bus HI-Z
  * |                                    |
  * +------------------------------------+ $BFFF-$C000
  * |                                    |
@@ -102,17 +111,6 @@
  * |                                    |
  * +------------------------------------+ $FFFF
  * 
- * NOTE:
- * We do not store the given byte when writing into mirrored RAM, while reading
- * into mirrored RAM, we do read the stored byte. Why?
- * 1) writing into RAM is faster than reading from RAM so it is better
- *    to slow down the writing RAM process than the reading RAM process.
- * 2) BASIC relies upon the fact that it can alter a byte to allocate the RAM.
- *    By preventing from storing in mirrored RAM, BASIC can safely allocate
- *    the right amount of RAM.
- * 
- * I wish we may only mirror RAM and ROM to make the address decoder simpler.
- *  
  */
 
 #define _XTAL_FREQ 64000000UL
@@ -134,14 +132,15 @@
 
 #define D0_7_dir  TRISC
 
+#define CLK_q     LATA3
 #define D0_7_q    LATC
 #define nRESET_q  LATE1
 
 #define nWAIT_d   nMREQ 
 #define nWAIT_q   nWAIT 
-#define nWAIT_clk nRFSH 
-#define nWAIT_clr G3POL 
-
+#define nWAIT_c   nRFSH 
+#define nWAIT_r   G3POL 
+#define nWAIT_s   G4POL 
 
 extern const unsigned char rom[]; // Equivalent to ROM, see the file "rom.c'
 unsigned char ram[RAM_SIZE]; // Equivalent to RAM
@@ -160,163 +159,296 @@ char getch(void) {
 }
 */
 
-//#define TOGGLE() (LATA^=(1<<7))
+#define PCFG(x, a, b, c, d, e)  x##E = e; x##A = a; x##B = b; x##C = c; x##D = d
 
 // main routine
 void main(void) {
-    // RESET output pin (RE1)
-    ANSELE1 = 0; // Disable analog function
-    LATE1 = 0; // Reset
-    TRISE1 = 0; // Set as output
-
-    // Address bus A15-A8 pin (RD)
-    ANSELD = 0x00; // Disable analog function
-    WPUD = 0xff; // Weak pull up
-    TRISD = 0xff; // Set as input
-
-    // Address bus A7-A0 pin (RB)
-    ANSELB = 0x00; // Disable analog function
-    WPUB = 0xff; // Weak pull up
-    TRISB = 0xff; // Set as input
-
-    // Data bus D7-D0 pin (RC)
-    ANSELC = 0x00; // Disable analog function
-    WPUC = 0xff; // Weak pull up
-    TRISC = 0xff; // Set as input(default)
-
-    // WR input pin (RE0)
-    ANSELE0 = 0; // Disable analog function
-    WPUE0 = 1; // Weak pull up
-    TRISE0 = 1; // Set as input
-
-    // INT output pin (RE2)
-    ANSELE2 = 0; // Disable analog function
-    LATE2 = 1; // No interrupt request
-    TRISE2 = 0; // Set as output
-
-    // IOREQ input pin (RA0)
-    ANSELA0 = 0; // Disable analog function
-    WPUA0 = 1; // Weak pull up
-    TRISA0 = 1; // Set as input
-
-    // MREQ CLC input pin (RA1)
-    ANSELA1 = 0; // Disable analog function
-    WPUA1 = 1; // Weak pull up
-    TRISA1 = 1; // Set as input
-    CLCIN0PPS = 0x1; //RA1->CLC1:CLCIN0;
-
-    // RFSH CLC input pin (RA2)
-    ANSELA2 = 0; // Disable analog function
-    WPUA2 = 1; // Weak pull up
-    TRISA2 = 1; // Set as input
-    CLCIN1PPS = 0x2; //RA2->CLC1:CLCIN1;
-
-    // WAIT CLC output pin (RA4)
-    ANSELA4 = 0; // Disable analog function
-    LATA4 = 1; // Default level
-    TRISA4 = 0; // Set as output
-    RA4PPS = 0x01;  //RA4->CLC1:CLC1;
     
-    // RD  input pin (RA5)
-    ANSELA5 = 0; // Disable analog function
-    WPUA5 = 1; // Weak pull up
-    TRISA5 = 1; // Set as input
-
+    //  |Ports|   PORT A  |   PORT B  |   PORT C  |   PORT D  |  PORT E   |
+    //  | Bits|   76543210|   76543210|   76543210|   76543210|  -----3210|
+    //  +-----+-----------+-----------+-----------+-----------+-----------+
+    PCFG(LAT  , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b11111101);
+    PCFG(ANSEL, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000);
+    PCFG(TRIS , 0b10100111, 0b11111111, 0b11111111, 0b11111111, 0b00001101);
+    PCFG(WPU  , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b00001001);
+    //            ||||||||    ||||||||    ||||||||    ||||||||        ||||
+    //            ||||||||    ||||||||    ||||||||    ||||||||        |||'- /WR input
+    //            ||||||||    ||||||||    ||||||||    ||||||||        ||'- /RESET input
+    //            ||||||||    ||||||||    ||||||||    ||||||||        |'- /INT output
+    //            ||||||||    ||||||||    ||||||||    ||||||||        '- /MCLR input
+    //            ||||||||    ||||||||    ||||||||    '+++++++- A15-A8 input
+    //            ||||||||    ||||||||    '+++++++- D7-D0 input/output   
+    //            ||||||||    '+++++++- A7-A0 input
+    //            |||||||'- /IORQ input
+    //            ||||||'- /MREQ input
+    //            |||||'- /RFSH input
+    //            ||||'- CLK output
+    //            |||'- /WAIT output
+    //            ||'- /RD input
+    //            |'- TXD input (U3TX)
+    //            '- RXD output (U3RX)
+    
     // System initialize
     OSCFRQ = 0x08; // 64MHz internal OSC
-    
+
+#if USE_RA7_FOR_TEST_PIN    
+    // TEST output pin (RA7)
+    TRISA7 = 0;     // A7 output
+    LATA7 = 0;      // pin value is 0
+    RA7PPS = 0;     // PPS as LATA7
+#else
     // UART3 initialize
     U3BRG = 416; // 9600bps @ 64MHz
     U3RXEN = 1; // Receiver enable
     U3TXEN = 1; // Transmitter enable
 
     // UART3 Receiver
-    ANSELA7 = 0; // Disable analog function
-    TRISA7 = 1; // RX set as input
     U3RXPPS = 0x07; //RA7->UART3:RX3;
 
     // UART3 Transmitter
-    ANSELA6 = 0; // Disable analog function
-    LATA6 = 1; // Default level
-    TRISA6 = 0; // TX set as output
     RA6PPS = 0x26;  //RA6->UART3:TX3;
 
     U3ON = 1; // Serial port enable
+#endif
+   
+#if USE_HARDWARE_CLK_GENERATOR
+    // CLC1.G4POL-------------.
+    //                        |
+    //                     .-----.
+    // RA2(/RFSH)------|>O-|D S Q|---RA4(/WAIT)
+    //                     |     |
+    // RA1(/MREQ)------|>O-|>   _|
+    //                     |  R Q|
+    //                     '-----'
+    //                       CLC1
     
-    // CLC1 logic configuration
-    CLCSELECT = 0;    // Select CLC1 registers  
-    CLCnPOL   = 0x82; // G2POL inverted, POL inverted
-    // CLC1 data inputs select
-    CLCnSEL0  = 0;    // D-FF CLK assign CLCIN0PPS(RA1 = /MREQ)
-    CLCnSEL1  = 1;    // D-FF D assign CLCIN1PPS(RA2 = /RFSH) 
-    CLCnSEL2  = 127;  // D-FF S assign none
-    CLCnSEL3  = 127;  // D-FF R assign none
-    // CLC1 gates logic select
-    CLCnGLS0  = 0x1;  // G1D1N enabled 
-    CLCnGLS1  = 0x4;  // G2D2N enabled
-    CLCnGLS2  = 0x0;  // none
-    CLCnGLS3  = 0x0;  // none
-    CLCnCON   = 0x84; // Enabled, 1-input D flip-flop with S and R, no interrupt
+    RA4PPS    = 0x01; // RA4(/WAIT)
+    
+    CLCIN0PPS = 0x01; // RA1(/MREQ)    
+    CLCIN1PPS = 0x02; // RA2(/RFSH)    
 
-    CLCDATA   = 0; // Clear CLC1 OUTPUT
+    // CLC1 logic configuration
+   
+    CLCSELECT = 0;   // Select CLC1 registers  
+    CLCnPOL = 0x03;  // G1POL and G2POL inverted
+    // CLC1 data inputs select
+    CLCnSEL0 = 0x00; // D-FF CLK - CLCIN0PPS(RA1 = /MREQ)
+    CLCnSEL1 = 0x01; // D-FF D   - CLCIN1PPS(RA2 = /RFSH)
+    CLCnSEL2 = 0x7F; // D-FF S   - none
+    CLCnSEL3 = 0x7F; // D-FF R   - none
+    // CLC1 gates logic select
+    CLCnGLS0 = 0x02; // G1D1T enabled 
+    CLCnGLS1 = 0x08; // G2D2T enabled
+    CLCnGLS2 = 0x00; // none
+    CLCnGLS3 = 0x00; // none
+    CLCnCON = 0x04;  // Disabled, 1-input D flip-flop with S and R, no interrupt
+#else
+    // RA3(CLK)---------------.
+    //                        |
+    //                     .-----.
+    // RA2(/RFSH)------|>O-|D S Q|---RA4(/WAIT)
+    //                     |     |
+    // RA1(/MREQ)------|>O-|>   _|
+    //                     |  R Q|
+    //                     '-----'
+    //                       CLC1
+    
+    RA4PPS = 0x01; // RA4(/WAIT)
+    
+    CLCIN0PPS = 0x01; // RA1(/MREQ)    
+    CLCIN1PPS = 0x02; // RA2(/RFSH)
+    CLCIN4PPS = 0x03; // RA3(CLK)
+
+    // CLC1 logic configuration
+   
+    CLCSELECT = 0;   // Select CLC1 registers  
+    CLCnPOL = 0x03;  // G1POL and G2POL inverted
+    // CLC1 data inputs select
+    CLCnSEL0 = 0x00; // D-FF CLK - CLCIN0PPS(RA3 = CLK)
+    CLCnSEL1 = 0x01; // D-FF D   - CLCIN1PPS(RA1 = /MREQ)
+    CLCnSEL2 = 0x7F; // D-FF R   - none
+    CLCnSEL3 = 0x04; // D-FF S   - CLCIN4PPS(RA2 = /RFSH)
+    // CLC1 gates logic select
+    CLCnGLS0 = 0x02; // G1D1T enabled 
+    CLCnGLS1 = 0x08; // G2D2T enabled
+    CLCnGLS2 = 0x00; // none
+    CLCnGLS3 = 0x80; // G4D4T enabled
+    CLCnCON = 0x04;  // Disabled, 1-input D flip-flop with S and R, no interrupt
+#endif
+    
+#if 0
+    // Rational for /WAIT going to 0:
+    //  (1) read-only access to ROM $0000-7FFF
+    //      if /MREQ->0 /WAIT = !(/RFSH=1 & (A15=0 & /RD=1))
+    //  (2) read-write access to RAM $8000-8FFF
+    //      if /MREQ->0 /WAIT = !(/RFSH=1 & (A15=1 & A14=0 & A13=0 & A12=0))
+    //  (3) read-write access to I/O $C000-FFFF
+    //      if /MREQ->0 /WAIT = !(/RFSH=1 & (A15=1 & A14=1 & A13=1))
+    //
+    //  /WAIT = !(/RFSH=1 & (A15=0 & /RD=1)) &
+    //          !(/RFSH=1 & (A15=1 & A14=0 & A13=0 & A12=0)) &
+    //          !(/RFSH=1 & (A15=1 & A14=1 & A13=1))
+    //  /WAIT = !(/RFSH=1 & (A15=0 & /RD=1)) &
+    //          !(/RFSH=1 & (A15=1 & A14=0 & A13=0 & A12=0)) &
+    //          !(/RFSH=1 & (A15=1 & A14=1 & A13=1))
+    //
+    // NOTE: the following CLC chaining are working because some signals
+    //       are delayed AFTER /MREQ.
+    //
+    // CLC1.G4POL-------------.
+    //                        |
+    //                     .-----.
+    // RA2(/RFSH)----------|D S Q|-.
+    //                     |     | |
+    // RA1(/MREQ)------|>O-|>   _| |
+    //                     |  R Q| |
+    //                     '-----' |
+    //                       CLC1  |
+    //                             |      __         
+    //                             o-----|  |           __
+    // RA5(/RD)--------------------+-----|& |------|>O-|& |
+    // RD7(A15)---o----------------+-|>O-|__|  .---|>O-|  |-|>O-(/WAIT)
+    //            |                |     CLC2  | .-|>O-|__|
+    //            |                |      __   | |     CLC6
+    //            |                o-----|  |  | |
+    //            o----------------+-----|& |--' |
+    // RD6(A14)-o-+----------------+-|>O-|  |    |
+    // RD5(A13)-+-+----------------+-----|__|    |
+    //          | |                |     CLC3    |
+    //          | |                |      __     |
+    //          | |                '-----|  |    |
+    //          | '----------------------|& |----'
+    //          '--------------------|>O-|  |
+    // RD5(A12)--------------------------|__|
+    //                                   CLC4
+    
+    // RA2(/RFSH)--------------------.
+    //                               |
+    //                               |
+    //                        __     |      __ 
+    // RD7(A15)---o------|>O-|  |    '-|>O-|  |
+    //            |          |& |------|>O-|& |-.
+    // RD6(A14)-o-+----------|__|  .---|>O-|  | |
+    //          | |          CLC2  | .-|>O-|__| |
+    //          | |           __   | |     CLC5 |
+    //          | o----------|  |  | |          |
+    //          o-+------|>O-|& |--' |          |
+    // RD5(A13)-+-+----------|__|    |          |
+    //          | |          CLC3    |          |
+    //          | |           __     |          |
+    //          | '----------|  |    |          |
+    //          '--------|>O-|& |----'          |
+    // RD5(A12)--------------|__|               |
+    //                       CLC4               |
+    // CLC1.G4POL-------------------------------(----------.
+    //                                          |          |
+    //                                          |       .-----.
+    //                                          '---|>O-|D S Q|---RA4(/WAIT)
+    //                                                  |     |
+    // RA1(/MREQ)-----------------------------------|>O-|>   _|
+    //                                                  |  R Q|
+    //                                                  '-----'
+    //                                                    CLC1
+
+    RA4PPS    = 0x01; // RA4(/WAIT)
+    RA7PPS    = 0x05; // RA7
+    
+    CLCIN0PPS = 0x01; // RA1(/MREQ)    
+    CLCIN1PPS = 0x02; // RA2(/RFSH)    
+    CLCIN2PPS = 0x1E; // RD6(A14)    
+    CLCIN3PPS = 0x1F; // RD7(A15)    
+    CLCIN4PPS = 0x05; // RA5(/RD)    
+    CLCIN6PPS = 0x1D; // RD5(A13)    
+    CLCIN7PPS = 0x1C; // RD4(A12)    
+     
+    // CLC1 logic configuration
+   
+    CLCSELECT = 0;    // Select CLC1 registers  
+    CLCnPOL   = 0x03; // G1POL and G2POL inverted
+    // CLC1 data inputs select
+    CLCnSEL0  = 0x00; // D-FF CLK - CLCIN0PPS(RA1 = /MREQ)
+    CLCnSEL1  = 0x37; // D-FF D   - CLC5_OUT 
+    CLCnSEL2  = 0x7F; // D-FF S   - none
+    CLCnSEL3  = 0x7F; // D-FF R   - none
+    // CLC1 gates logic select
+    CLCnGLS0  = 0x02; // G1D1T enabled 
+    CLCnGLS1  = 0x08; // G2D2T enabled
+    CLCnGLS2  = 0x00; // none
+    CLCnGLS3  = 0x00; // none
+    CLCDATA   = 1;    // CLC1OUT = 1
+    CLCnCON   = 0x84; // Enabled, 1-input D flip-flop with S and R, no interrupt
 
     // CLC2 logic configuration
     CLCSELECT = 1;    // Select CLC2 registers 
-    CLCnPOL   = 0x00;
+    CLCnPOL   = 0x0D; // G1POL, G3POL and G4POL inverted
     // CLC2 data inputs select
-    CLCnSEL0  = 4;    // 4-AND 1 assign CLCIN4PPS (RA5 = /RD)
-    CLCnSEL1  = 127;  // 4-AND 2 assign none
-    CLCnSEL2  = 127;  // 4-AND 3 assign none
-    CLCnSEL3  = 127;  // 4-AND 4 assign none
+    CLCnSEL0  = 0x03;  // 4-AND #1 - CLCIN3PPS (RD7 = A15)
+    CLCnSEL1  = 0x02;  // 4-AND #2 - CLCIN2PPS (RD6 = A14)
+    CLCnSEL2  = 0x7F;  // 4-AND #3 - none
+    CLCnSEL3  = 0x7F;  // 4-AND #4 - none
     // CLC2 gates logic select
     CLCnGLS0  = 0x02; // G1D1T enabled
-    CLCnGLS1  = 0x00;
+    CLCnGLS1  = 0x08; // G2D2T enabled
     CLCnGLS2  = 0x00;
     CLCnGLS3  = 0x00;
+    CLCDATA   = 0x00; // CLC2OUT = 0
     CLCnCON   = 0x82; // Enabled, 4-input AND, no interrupt
-
-    CLCDATA   = 0; // Clear CLC2 OUTPUT
 
     // CLC3 logic configuration
-    CLCSELECT = 2;    // Select CLC2 registers 
-    CLCnPOL   = 0x00;
+    CLCSELECT = 2;    // Select CLC3 registers 
+    CLCnPOL   = 0x0A; // G2POL and G4POL inverted
     // CLC3 data inputs select
-    CLCnSEL0  = 2;    // 4-AND 1 assign CLCIN2PPS (RD6 = A14)
-    CLCnSEL1  = 127;  // 4-AND 2 assign none
-    CLCnSEL2  = 127;  // 4-AND 3 assign none
-    CLCnSEL3  = 127;  // 4-AND 4 assign none
+    CLCnSEL0  = 0x03; // 4-AND #1 - CLCIN3PPS (RD7 = A15)
+    CLCnSEL1  = 0x02; // 4-AND #2 - CLCIN2PPS (RD6 = A14)
+    CLCnSEL2  = 0x06; // 4-AND #3 - CLCIN6PPS (RD5 = A13)
+    CLCnSEL3  = 0x7F; // 4-AND #4 - none
     // CLC3 gates logic select
     CLCnGLS0  = 0x02; // G1D1T enabled
-    CLCnGLS1  = 0x00;
-    CLCnGLS2  = 0x00;
+    CLCnGLS1  = 0x08; // G2D2T enabled
+    CLCnGLS2  = 0x20; // G3D3T enabled
     CLCnGLS3  = 0x00;
+    CLCDATA   = 0x00; // CLC3OUT = 0 
     CLCnCON   = 0x82; // Enabled, 4-input AND, no interrupt
-
-    CLCDATA   = 0; // Clear CLC3 OUTPUT
 
     // CLC4 logic configuration
-    CLCSELECT = 3;    // Select CLC2 registers 
-    CLCnPOL   = 0x00;
-    // CLC4 data inputs select
-    CLCnSEL0  = 3;    // 4-AND 1 assign CLCIN3PPS (RD7 = A15)
-    CLCnSEL1  = 127;  // 4-AND 2 assign none
-    CLCnSEL2  = 127;  // 4-AND 3 assign none
-    CLCnSEL3  = 127;  // 4-AND 4 assign none
-    // CLC4 gates logic select
+    CLCSELECT = 3;    // Select CLC3 registers 
+    CLCnPOL   = 0x0A; // G2POL, G3POL and G4POL inverted
+    // CLC3 data inputs select
+    CLCnSEL0  = 0x03; // 4-AND #1 - CLCIN3PPS (RD7 = A15)
+    CLCnSEL1  = 0x02; // 4-AND #2 - CLCIN2PPS (RD6 = A14)
+    CLCnSEL2  = 0x07; // 4-AND #3 - CLCIN7PPS (RD4 = A12)
+    CLCnSEL3  = 0x7F; // 4-AND #4 - none
+    // CLC3 gates logic select
     CLCnGLS0  = 0x02; // G1D1T enabled
-    CLCnGLS1  = 0x00;
-    CLCnGLS2  = 0x00;
+    CLCnGLS1  = 0x08; // G2D2T enabled
+    CLCnGLS2  = 0x20; // G3D3T enabled
     CLCnGLS3  = 0x00;
+    CLCDATA   = 0x00; // CLC3OUT = 0 
     CLCnCON   = 0x82; // Enabled, 4-input AND, no interrupt
 
-    CLCDATA   = 0; // Clear CLC4 OUTPUT
+    // CLC5 logic configuration
+    CLCSELECT = 4;    // Select CLC5 registers 
+    CLCnPOL   = 0x0F; // G1POL, G2POL, G3POL, G4POL inverted
+    // CLC5 data inputs select
+    CLCnSEL0  = 0x01; // 4-AND #1 - CLCIN1PPS (RA2 = /RFSH)
+    CLCnSEL1  = 0x34; // 4-AND #2 - CLC2_OUT
+    CLCnSEL2  = 0x35; // 4-AND #3 - CLC3_OUT
+    CLCnSEL3  = 0x36; // 4-AND #4 - CLC4_OUT
+    // CLC5 gates logic select
+    CLCnGLS0  = 0x02; // G1D1T enabled
+    CLCnGLS1  = 0;//0x08; // G2D2T enabled
+    CLCnGLS2  = 0;//0x20; // G3D3T enabled
+    CLCnGLS3  = 0;//0x40; // G4D4N enabled
+    CLCDATA   = 0x00; // CLC4OUT 0; 
+    CLCnCON   = 0x82; // Enabled, 4-input AND, no interrupt
 
-    CLCSELECT = 0;    // Select CLC1 registers for the rest of code 
+    // Select CLC1 registers for the rest of code
+    CLCSELECT = 0; 
+#endif
     
     // Z80 clock by NCO FDC mode (RA3)
+#if USE_HARDWARE_CLK_GENERATOR
     RA3PPS = 0x3f; // RA3 assign NCO1
-    ANSELA3 = 0; // Disable analog function
-    TRISA3 = 0; // PWM output pin
     NCO1INCU = (unsigned char)((Z80_CLK*2/61/65536) & 0xff);
     NCO1INCH = (unsigned char)((Z80_CLK*2/61/256) & 0xff);
     NCO1INCL = (unsigned char)((Z80_CLK*2/61) & 0xff);
@@ -324,31 +456,63 @@ void main(void) {
     NCO1PFM = 0;  // FDC mode
     NCO1OUT = 1;  // NCO output enable
     NCO1EN = 1;   // NCO enable
-
-    // RA7 as TEST pin ()
-    //TRISA7 = 0;     // A7 output
-    //LATA7 = 0;      // pin value is 0
-    //RA7PPS = 0;     // PPS as LATA7
+#else
+    RA3PPS = 0x00;
+#endif
     
+    // Z80 start
+
     // Prepare ROM access once
     asm("movlw	low (_rom shr (0+16))");
     asm("movwf	tblptru,c");
 
-    // Z80 start
+    CLCnCON = 0x84;
 
-    // Wait for at some Z80 clocks, before starting Z80
-    for (unsigned char i = 0; i < (unsigned char)(32*PIC_CLK/Z80_CLK/4); ++i) {
-        // That loop kernel contains 4 instructions hence "/4"
-    }
+#if USE_HARDWARE_CLK_GENERATOR
     
+    // Force /WAIT = 1
+    nWAIT_s = 1;
+
+    // Do not release /RESET right after starting CLK generation
+    while (CLK == 1);
+    while (CLK == 0);
+    while (CLK == 1);
+    while (CLK == 0);
+    while (CLK == 1);
+    while (CLK == 0);
+    while (CLK == 1);
+    while (CLK == 0);
+
     // Release /RESET
     nRESET_q = 1;
 
-    while(1) {
+    nWAIT_s = 0;
+    
+    //while (nMREQ == 1);
+    
+#if 0
+    // Set data bus as output
+    D0_7_dir = 0x00;
+    D0_7_q = 0x00;
+    
+    while (1)
+    {
+        while (nWAIT == 1);
+
+        // Release /WAIT
+        nWAIT_s = 1;
+
+        // Rearm /WAIT D-FF
+        nWAIT_s = 0;
+    }
+#else
+    while (1) {
+    
         // Wait for /WAIT falling down
-        while (nWAIT);
-        
-        //LATA7 ^= 1;
+        while (nWAIT == 1)
+            ;
+
+        TEST(^= 1);
 
         if (!nRD) {
             // Z80 memory read cycle (/RD active)
@@ -385,21 +549,21 @@ void main(void) {
             D0_7_dir = 0x00;
 
             // Release /WAIT
-            nWAIT_clr = 1;
+            nWAIT_s = 1;
 
             // Rearm /WAIT D-FF
-            nWAIT_clr = 0;
+            nWAIT_s = 0;
 
             // Wait /RD termination
             while (!nRD);
 
             // Set data bus as input
-            D0_7_dir = 0xff;                                
+            D0_7_dir = 0xff;
         } else {
             // Z80 memory write cycle (/RD inactive, /WR implicitly active)
             
             if ((A8_15 & 0xf0) == 0x80) {
-                // $8000-$9FFF -> RAM 4KB
+                // $8000-$8FFF -> RAM 4KB
 
                 // ram[A0_15 & (RAM_SIZE-1)] = D0_7;
                 asm("movf   PORTB,w");
@@ -414,21 +578,108 @@ void main(void) {
                 
                 U3TXB = D0_7;
             } else {
-                // $0000-$3FFF or $A000-$BFFF -> store nothing
-                    
-                // Hack for BASIC to allocate the right amount of RAM. :(
+                // store nothing
             }
-            
             // Release /WAIT
-            nWAIT_clr = 1;
+            nWAIT_s = 1;
 
             // Rearm /WAIT D-FF
-            nWAIT_clr = 0;
+            nWAIT_s = 0;
             
             // Wait /WR termination --- unneeded!
             //while (!nWR);
         }
+
+        TEST(^= 1);
     }
+#endif
+#else
+
+    CLK_q = 1, CLK_q = 0;
+    CLK_q = 1, CLK_q = 0;
+    CLK_q = 1, CLK_q = 0;
+    
+    nRESET_q = 1;
+
+    CLK_q = 1, CLK_q = 0;
+    CLK_q = 1, CLK_q = 0;
+    CLK_q = 1, CLK_q = 0;
+    
+    //while (nWAIT);
+    
+    //goto shortcut;
+    
+    for (;;) {
+        TEST(^= 1);
+        while (nWAIT) { CLK_q = 1; CLK_q = 0; };
+        TEST(^= 1);
+        
+    //shortcut:
+        if (!nRD) {
+            // Z80 memory read cycle (/RD active)
+            
+            if ((A8_15 & 0x80) == 0) {
+                // $0000-$3FFF -> ROM (16KB)
+                // $4000-$7FFF -> garbage (16KB)
+
+                // D0_7_q = rom[A0_15];
+                asm("movff	PORTB,tblptrl");
+                asm("movff	PORTD,tblptrh");
+                asm("tblrd	*");
+                asm("movff	tablat,LATC");
+
+            } else if ((A8_15 & 0x40) == 0) {
+                // $8000-$BFFF -> RAM (16KB = 4 x 4KB mirrored)
+
+                // D0_7_q = ram[(A0_15 & (RAM_SIZE-1)];
+                asm("movf   PORTB,w");
+                asm("movwf	fsr2l,c");
+                asm("movf   PORTD,w");
+                asm("andlw	15"); // (high RAM_SIZE)-1
+                asm("addlw	(high _ram)");
+                asm("movwf	fsr2h,c");
+                asm("movf	indf2,w,c");
+                asm("movwf	LATC,c");                   
+            } else {
+                // $C000-$FFFF -> I/O registers
+                
+                // I/O UART (A0 = 1: U3 flag / 0: U3 RX buffer)
+                D0_7_q = (A0_7 & 1) ? PIR9 : U3RXB;
+            }
+           
+            D0_7_dir = 0b00000000;
+
+            CLK_q = 1, CLK_q = 0; // T1:H->T2:L
+            CLK_q = 1, CLK_q = 0; // T2:H->T3:L
+
+            D0_7_dir = 0b11111111;
+            
+        } else {
+            // Z80 memory write cycle (/RD inactive, /WR implicitly active)
+            
+            if ((A8_15 & 0xf0) == 0x80) {
+                // $8000-$8FFF -> RAM 4KB
+
+                // ram[A0_15 & (RAM_SIZE-1)] = D0_7;
+                asm("movf   PORTB,w");
+                asm("movwf	fsr2l,c");
+                asm("movf   PORTD,w");
+                asm("andlw	15"); // (high RAM_SIZE)-1
+                asm("addlw	(high _ram)");
+                asm("movwf	fsr2h,c");
+                asm("movff	PORTC,indf2");
+            } else if ((A8_15 & 0x40) == 0x40) {
+                // $4000-$7FFF or $C000-$FFFF -> I/O UART (U3 TX buffer)
+                
+                U3TXB = D0_7;
+            } else {
+                // store nothing
+            }
+            
+            CLK_q = 0, CLK_q = 1; // T2->T3
+        }
+    }
+#endif
 }
 
 asm("PSECT BASICROM,reloc=10000h");
