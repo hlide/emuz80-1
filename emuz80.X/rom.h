@@ -23,7 +23,7 @@ asm("PSECT Z80ROM,reloc=10000h");
 #define FILL4096(x) FILL2048(x), FILL2048(x)
 #define FILL8192(x) FILL4096(x), FILL4096(x)
 
-const unsigned char __section("Z80ROM") rom[ROM_SIZE] = {
+const unsigned char __section("Z80ROM") z80rom[ROM_SIZE] = {
     // EMUBASIC
 	0xf3, 0x31, 0xed, 0x80, 0xc3, 0x41, 0x00, 0xff,
 	0xc3, 0x34, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff,

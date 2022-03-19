@@ -67,3 +67,8 @@
 #define nWAIT_r   G3POL 
 #define nWAIT_s   G4POL 
 
+// Equivalent to ROM for a Z80, see the file "rom.h' for the details
+extern const unsigned char z80rom[];
+// Equivalent to RAM for a Z80
+unsigned char z80ram[RAM_SIZE];
+
