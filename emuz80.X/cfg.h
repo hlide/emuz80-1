@@ -62,6 +62,7 @@
 #include <xc.h>
 //#include <stdio.h>
 
+#define USE_EMUBASIC 1
 #define USE_RA7_FOR_TEST_PIN 0
 
 #define PIC_CLK 16000000UL // 16MIPS
@@ -75,8 +76,12 @@
 
 #if USE_RA7_FOR_TEST_PIN
 #define TEST(x) LATA7 x
+#define TEST_SET "bsf LATA,7,c"
+#define TEST_CLR "bcf LATA,7,c"
 #else
 #define TEST(x)
+#define TEST_SET
+#define TEST_CLR
 #endif
 
 #define loop_if(x) while ((x)) {}

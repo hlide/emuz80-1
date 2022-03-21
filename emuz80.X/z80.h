@@ -7,7 +7,7 @@
 */
 
 //#define Z80_CLK  4000000UL // Z80 clock frequency
-#define Z80_CLK  4500000UL // Z80 clock frequency
+#define Z80_CLK  4600000UL // Z80 clock frequency
     
 /*
  * Memory mapping to ease address decoding:
@@ -27,14 +27,17 @@
  * |                                    |
  * +------------------------------------+ $8FFF-$9000
  * |                                    |
- * :            Data bus HI-Z           : RO(A15..12 != 1000b) => Mirrored RAM
- * :                                    : WO(A15..12 != 1000b) => Data bus HI-Z
+ * :            Data bus HI-Z           : RW(A15..12 != 1000b) => Data bus HI-Z
  * |                                    |
- * +------------------------------------+ $BFFF-$C000
+ * +------------------------------------+ $DFFF-$E000
  * |                                    |
  * :        I/O registers               : RW(A14 = 1b) => UART
  * |[--------U3TXB/U3RXB---------] $E000| 
  * |[-----------PIR9-------------] $E001|
+ * |                                    |
+ * +------------------------------------+ $EFFF-$F000
+ * |                                    |
+ * :            Data bus HI-Z           : RW(A15..12 == 1111b) => Data bus HI-Z
  * |                                    |
  * +------------------------------------+ $FFFF
  * 
