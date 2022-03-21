@@ -16,29 +16,35 @@
 // main routine
 void main(void) {
     
-    //  |Ports|   PORT A  |   PORT B  |   PORT C  |   PORT D  |  PORT E   |
-    //  | Bits|   76543210|   76543210|   76543210|   76543210|  -----3210|
-    //  +-----+-----------+-----------+-----------+-----------+-----------+
-    PCFG(LAT  , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b11111101);
-    PCFG(ANSEL, 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000);
-    PCFG(TRIS , 0b10100111, 0b11111111, 0b11111111, 0b11111111, 0b00001101);
-    PCFG(WPU  , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b00001001);
-    //            ||||||||    ||||||||    ||||||||    ||||||||        ||||
-    //            ||||||||    ||||||||    ||||||||    ||||||||        |||'- /WR input
-    //            ||||||||    ||||||||    ||||||||    ||||||||        ||'- /RESET input
-    //            ||||||||    ||||||||    ||||||||    ||||||||        |'- /INT output
-    //            ||||||||    ||||||||    ||||||||    ||||||||        '- /MCLR input
-    //            ||||||||    ||||||||    ||||||||    '+++++++- A15-A8 input
-    //            ||||||||    ||||||||    '+++++++- D7-D0 input/output   
-    //            ||||||||    '+++++++- A7-A0 input
-    //            |||||||'- /IORQ input
-    //            ||||||'- /MREQ input
-    //            |||||'- /RFSH input
-    //            ||||'- CLK output
-    //            |||'- /WAIT output
-    //            ||'- /RD input
-    //            |'- TXD input (U3TX)
-    //            '- RXD output (U3RX)
+    //  | Port |   PORT A  |   PORT B  |   PORT C  |   PORT D  |  PORT E   |
+    //  | Bits |   76543210|   76543210|   76543210|   76543210|  -----3210|
+    //  +------+-----------+-----------+-----------+-----------+-----------+
+#if Z80_NMOS
+    PCFG(INLVL , 0b11000000, 0b00000000, 0b00000000, 0b00000000, 0b00000001);
+#endif
+    PCFG(LAT   , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b11111101);
+    PCFG(ANSEL , 0b00000000, 0b00000000, 0b00000000, 0b00000000, 0b00000000);
+    PCFG(TRIS  , 0b10100111, 0b11111111, 0b11111111, 0b11111111, 0b00001101);
+    PCFG(WPU   , 0b11100111, 0b11111111, 0b11111111, 0b11111111, 0b00001001);
+#if USE_FASTER_SLEW_RATE
+    PCFG(SLRCON, 0b11000000, 0b00000000, 0b00000000, 0b00000000, 0b00000001);
+#endif
+    //             ||||||||    ||||||||    ||||||||    ||||||||        ||||
+    //             ||||||||    ||||||||    ||||||||    ||||||||        |||'- /WR input
+    //             ||||||||    ||||||||    ||||||||    ||||||||        ||'- /RESET input
+    //             ||||||||    ||||||||    ||||||||    ||||||||        |'- /INT output
+    //             ||||||||    ||||||||    ||||||||    ||||||||        '- /MCLR input
+    //             ||||||||    ||||||||    ||||||||    '+++++++- A15-A8 input
+    //             ||||||||    ||||||||    '+++++++- D7-D0 input/output   
+    //             ||||||||    '+++++++- A7-A0 input
+    //             |||||||'- /IORQ input
+    //             ||||||'- /MREQ input
+    //             |||||'- /RFSH input
+    //             ||||'- CLK output
+    //             |||'- /WAIT output
+    //             ||'- /RD input
+    //             |'- TXD input (U3TX)
+    //             '- RXD output (U3RX)
     
     // System initialize
     OSCFRQ = 0x08; // 64MHz internal OSC
@@ -50,17 +56,13 @@ void main(void) {
     RA7PPS = 0;     // PPS as LATA7
 #else
     // UART3 initialize
-    U3BRG = 416; // 9600bps @ 64MHz
+    U3BRG = 416; // 9600bps@64MHz
     U3RXEN = 1; // Receiver enable
     U3TXEN = 1; // Transmitter enable
-
-    // UART3 Receiver
-    U3RXPPS = 0x07; //RA7->UART3:RX3;
-
-    // UART3 Transmitter
-    RA6PPS = 0x26;  //RA6->UART3:TX3;
-
     U3ON = 1; // Serial port enable
+    // UART3 Receiver/Transmitter
+    U3RXPPS = 0x07; //RA7->UART3:RX3;
+    RA6PPS = 0x26;  //RA6->UART3:TX3;
 #endif
 
     CLCIN0PPS = 0x01; // RA1(/MREQ)    
