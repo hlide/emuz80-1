@@ -9,6 +9,7 @@
 #include "cfg.h"
 #include "z80.h"
 #include "rom.h"
+#include "ram.h"
 
 #define PCFG(x, a, b, c, d, e)  x##E = e; x##A = a; x##B = b; x##C = c; x##D = d
 
@@ -251,8 +252,7 @@ void main(void) {
 "\n"    "           bra     WAIT_LOOP"
 "\n"    "RAM_R2:    movff   PORTB,fsr2l"
 "\n"    "           movf    PORTD,w"
-"\n"    "           andlw	15" // (high RAM_SIZE)-1
-"\n"    "           addlw	high _z80ram"
+"\n"    "           xorlw	(high _z80ram)^128"
 "\n"    "           movwf	fsr2h,c"
 "\n"    "           movf	indf2,w,c"
 "\n"    "           movwf	LATC,c"    
@@ -279,26 +279,23 @@ void main(void) {
 "\n"    "HIZ_R6:"
 "\n"    "HIZ_R5:"
 "\n"    "HIZ_R3:"
-"\n"    "HIZ_R0:"
-"\n"    "          "TEST_SET
+"\n"    "HIZ_R0:   "TEST_SET
 "\n"    "          "TEST_CLR
 "\n"    "HIZ_W7:"
 "\n"    "HIZ_W6:"
 "\n"    "HIZ_W5:"
 "\n"    "HIZ_W3:"
 "\n"    "HIZ_W1:"
-"\n"    "HIZ_W0:"
-"\n"    "HIZ_XX:   "TEST_SET
+"\n"    "HIZ_W0:   "TEST_SET
 "\n"    "          "TEST_CLR
-"\n"    "           setf	TRISC^1024,c"
+"\n"    "HIZ_XX:    setf	TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"   
 "\n"    "           bcf     CLCnPOL,3,b"
 "\n"    "           bra     WAIT_LOOP"
 "\n"    "RAM_W2:    setf	TRISC^1024,c"
 "\n"    "           movff   PORTB,fsr2l"
 "\n"    "           movf    PORTD,w"
-"\n"    "           andlw	15" // (high RAM_SIZE)-1
-"\n"    "           addlw	high _z80ram"
+"\n"    "           xorlw	(high _z80ram)^128"
 "\n"    "           movwf	fsr2h,c"
 "\n"    "           movff	PORTC,indf2"
 "\n"    "           bsf     CLCnPOL,3,b"
