@@ -6,9 +6,7 @@
   Written by Christophe Avoinne
 */
 
-//#define Z80_CLK  2000000UL // Z80 clock frequency
-//#define Z80_CLK  4000000UL // Z80 clock frequency
-#define Z80_CLK  4300000UL // Z80 clock frequency
+#define Z80_CLK  4200000UL // Z80 clock frequency
 #define Z80_NMOS 0
 #define Z80_CMOS (!Z80_NMOS)
 

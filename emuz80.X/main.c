@@ -86,7 +86,7 @@ void main(void) {
     //                       CLC1   
     RA4PPS = 0x01;   // RA4(/WAIT)  
     CLCSELECT = 0;   // Select CLC1 registers  
-    CLCnPOL = 0x03;  // G1POL and G2POL inverted
+    CLCnPOL = 0x0B;  // G1POL, G2POL and G4POL inverted
     // CLC1 data inputs select
     CLCnSEL0 = 0x00; // D-FF CLK - CLCIN0PPS(RA1 = /MREQ)
     CLCnSEL1 = 0x01; // D-FF D   - CLCIN1PPS(RA2 = /RFSH)
@@ -181,51 +181,60 @@ void main(void) {
     CLCnGLS2 = 0x20; // G3D3T enabled
     CLCnGLS3 = 0x80; // G4D4T enabled
     CLCnCON = 0x82;  // Enabled, 4-input AND, no interrupt
-    
    
     // Z80 clock by NCO FDC mode (RA3)
     RA3PPS = 0x3F;   // RA3 assign NCO1
     NCO1INCU = (unsigned char)((Z80_CLK*2/61/65536) & 0xFF);
     NCO1INCH = (unsigned char)((Z80_CLK*2/61/256) & 0xFF);
     NCO1INCL = (unsigned char)((Z80_CLK*2/61) & 0xFF);
-    NCO1CLK = 0x00;  // Clock source Fosc
+    NCO1CLK = 0x01;  // Clock source HFINTOSC // was Fosc 
     NCO1PFM = 0;     // FDC mode
     NCO1OUT = 1;     // NCO output enable
     NCO1EN = 1;      // NCO enable
+
+    // SLEEP configuration
+    CPUDOZE = 0b00000000;
+    VREGCON = 0b00000000;
     
     // Z80 start
 
+    //GIE = 0;
     CLCSELECT = 0;
+    CLCnCON = 0x8C;  // Enabled, 1-input D flip-flop with S and R, falling edge interrupt
 
-    CLCnCON = 0x84;
-
-    // Force /WAIT = 1
-    nWAIT_s = 1;
-
-    // Do not release /RESET right after starting CLK generation
-    loop_if (CLK == 1);
-    loop_if (CLK == 0);
-    loop_if (CLK == 1);
-    loop_if (CLK == 0);
-    loop_if (CLK == 1);
-    loop_if (CLK == 0);
-    loop_if (CLK == 1);
-    loop_if (CLK == 0);
-
+//    CLC1IF = 0;
+//    CLC1IE = 1;
+//    GIE = 1;
+//    nRESET_q = 1;
+    
     asm(
 "\n"    "           movlw	low (_z80rom shr (0+16))"
-"\n"    "           movwf	tblptru,c"
+"\n"    "           movwf	TBLPTRU,c"
+"\n"    "           setf    LATC,c"
+"\n"    "           bcf     PIR0,5,c"
+"\n"    "           bsf     PIE0,5,c"
 "\n"    "           bsf     LATE,1,c"
 "\n"    "           movlb   0"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     MAIN_JUMP"
-"\n"    "           ALIGN   256"
-"\n"    "MAIN_JUMP: movf    PCL,w,c"
-"\n"    "WAIT_LOOP:"TEST_SET
-"\n"    "POLL_LOOP: btfsc   CLCDATA,0,b"
-"\n"    "           bra     POLL_LOOP"
-"\n"    "           movf    CLCDATA,w,b"    
-"\n"    "          "TEST_CLR
+"\n"    "           bsf     INTCON0,7,c"
+//"\n"    "WAIT_LOOP:"//TEST_SET
+//"\n"    "          "//TEST_CLR
+"\n"    "           goto    WAIT_LOOP"
+    );
+}
+
+void __interrupt(irq(default),base(8)) Default_ISR()
+{
+    // expectedly never called    
+}
+
+asm("PSECT CLC1ROM,reloc=100h");
+void  __section("CLC1ROM") __interrupt(irq(CLC1),base(8)) CLC1_ISR()
+{
+    asm(
+"\n"    "          "TEST_SET
+"\n"    "           bcf     PIR0,5,c"
+"\n"    "           movf    CLCDATA,w,b"
 "\n"    "           andlw   0b00011110"
 "\n"    "           addwf   PCL,f,c"
 "\n"    "           bra     HIZ_R0" // W  = xxx0000x --> RD: Hi-Z            
@@ -244,39 +253,44 @@ void main(void) {
 "\n"    "           bra     HIZ_W5" // W  = xxx1101x --> WR: Hi-Z          
 "\n"    "           bra     HIZ_W6" // W  = xxx1110x --> WR: Hi-Z            
 "\n"    "           bra     HIZ_W7" // W  = xxx1111x --> WR: Hi-Z         
-"\n"    "ROM_R1:    movff	PORTB,tblptrl"
-"\n"    "           movff	PORTD,tblptrh"
+"\n"    "ROM_R1:    movff	PORTB,TBLPTRL"
+"\n"    "           movff	PORTD,TBLPTRH"
 "\n"    "           tblrd	*"
-"\n"    "           movff	tablat,LATC"
+"\n"    "           movff	TABLAT,LATC"
 "\n"    "           clrf	TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"
-"\n"    "RAM_R2:    movff   PORTB,fsr2l"
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
+"\n"    "RAM_R2:    movff   PORTB,FSR2L"
 "\n"    "           movf    PORTD,w"
 "\n"    "           xorlw	(high _z80ram)^128"
-"\n"    "           movwf	fsr2h,c"
-"\n"    "           movf	indf2,w,c"
+"\n"    "           movwf	FSR2H,c"
+"\n"    "           movf	INDF2,w,c"
 "\n"    "           movwf	LATC,c"    
 "\n"    "           clrf	TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"       
-"\n"    "IOA_R4:    clrf	TRISC^1024,c"
-"\n"    "           btfsc	PORTB,0,c"
-"\n"    "           bra     IOA_R4_1"       
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
+"\n"    "IOA_R4:    btfsc	PORTB,0,c"
+"\n"    "           bra     IOA_R4_1"
 "\n"    "IOA_R4_0:  movff   U3RXB,LATC"
+"\n"    "           clrf	TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
 #if USE_RA7_FOR_TEST_PIN
 "\n"    "IOA_R4_1:  setf    LATC,c"
 #else
 "\n"    "IOA_R4_1:  movff   PIR9,LATC"
 #endif
+"\n"    "           clrf	TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
 "\n"    "HIZ_R7:"
 "\n"    "HIZ_R6:"
 "\n"    "HIZ_R5:"
@@ -290,26 +304,29 @@ void main(void) {
 "\n"    "HIZ_W1:"
 "\n"    "HIZ_W0:   "TEST_SET
 "\n"    "          "TEST_CLR
-"\n"    "HIZ_XX:    setf	TRISC^1024,c"
+"\n"    "HIZ_XX:    setf    TRISC^1024,c"
 "\n"    "           bsf     CLCnPOL,3,b"   
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
 "\n"    "RAM_W2:    setf	TRISC^1024,c"
-"\n"    "           movff   PORTB,fsr2l"
+"\n"    "           movff   PORTB,FSR2L"
 "\n"    "           movf    PORTD,w"
 "\n"    "           xorlw	(high _z80ram)^128"
-"\n"    "           movwf	fsr2h,c"
-"\n"    "           movff	PORTC,indf2"
+"\n"    "           movwf	FSR2H,c"
+"\n"    "           movff	PORTC,INDF2"
 "\n"    "           bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"       
-"\n"    "IOA_W4:    setf	TRISC^1024,c"
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
+"\n"    "IOA_W4:    setf    TRISC^1024,c"
 "\n"    "           btfsc	PORTB,0,c"
 "\n"    "           bra     IOA_W4_1"       
-"\n"    "IOA_W4_0:  setf	TRISC^1024,c"
-"\n"    "           movff	PORTC,U3TXB"
+"\n"    "IOA_W4_0:  movff   PORTC,U3TXB"
 "\n"    "IOA_W4_1:  bsf     CLCnPOL,3,b"
 "\n"    "           bcf     CLCnPOL,3,b"
-"\n"    "           bra     WAIT_LOOP"       
+"\n"    "          "TEST_CLR
+"\n"    "           retfie"
+"\n"    "WAIT_LOOP: bra     WAIT_LOOP"
     );
 }
